@@ -11,6 +11,22 @@
 #include "../openbsd-compat/openbsd-compat.h"
 #include "extern.h"
 
+typedef struct fido_parameters{
+	const char* rp_id;
+	const char* rp_name;
+	const char* user_name;
+	const char* user_display_name;
+	const char* user_icon;
+} fido_parameters_t;
+
+void get_fixed_parameters(fido_parameters_t* params){
+	params->rp_id = "localhost";
+	params->rp_name = "sandbox";
+	params->user_name = "1234-technician";
+	params->user_display_name= "Technician";
+	params->user_icon = NULL;
+}
+
 static fido_dev_t *
 open_from_manifest(const fido_dev_info_t *dev_infos, size_t len,
     const char *path)
@@ -82,11 +98,30 @@ int get_client_data_hash(unsigned char* client_data_hash, size_t bytes_in_hash){
 	print_bits(client_data_hash,bytes_in_hash);
 	printf("\n");
 
+	free(collected_client_data);
 	return 0;
 }
 
+// taken from tools/cred_make.c 
+static void
+print_attcred(const fido_cred_t *cred)
+{
+	printf("Result:\n");
+	printf("Client data hash:\n");
+	print_bits(fido_cred_clientdata_hash_ptr(cred),fido_cred_clientdata_hash_len(cred));
+	printf("\nAuth data:\n");
+	print_bits(fido_cred_authdata_ptr(cred),fido_cred_authdata_len(cred));
+	printf("\nCredential id:\n");
+	print_bits(fido_cred_id_ptr(cred), fido_cred_id_len(cred));
+	printf("\nSignature:\n");
+	print_bits(fido_cred_sig_ptr(cred), fido_cred_sig_len(cred));
+	printf("\nPublic key:\n");
+	print_bits(fido_cred_x5c_ptr(cred),fido_cred_x5c_len(cred));
+	printf("\n");
+}
+
 // TODO Error handling
-static void make_credential(fido_dev_t	*dev){
+static int make_credential(fido_dev_t	*dev, const fido_parameters_t* parameters){
 	fido_cred_t	*cred = NULL;
 	int return_code = 0;
 
@@ -109,26 +144,16 @@ static void make_credential(fido_dev_t	*dev){
 		errx(1, "fido_cred_set_clientdata_hash: %s (0x%x)", fido_strerr(return_code), return_code);
 
 	// RP
-	const char rp_id[] = "localhost";
-	const char rp_name[] = "sandbox localhost";
-	if ((return_code = fido_cred_set_rp(cred, rp_id, rp_name)) != FIDO_OK)
+	if ((return_code = fido_cred_set_rp(cred, parameters->rp_id, parameters->rp_name)) != FIDO_OK)
 		errx(1, "fido_cred_set_rp: %s (0x%x)", fido_strerr(return_code), return_code);
 
 	// User
-	const char user_name[] = "1234-technician";
-	const char user_display_name[] = "Technician";
-	const char user_icon[] = NULL;
 	size_t bytes_in_user_id = 32;
-	
 	unsigned char user_id[bytes_in_user_id];
-	// unsigned char* user_id = malloc(bytes_in_user_id * sizeof(char));
 	fill_with_random_bytes(user_id,bytes_in_user_id);
-	printf("Size of user id: %d \n", bytes_in_user_id);
-	// TODO https://stackoverflow.com/questions/4054284/sizeof-for-a-null-terminated-const-char
-	// kann so nicht funktionieren, sizeof() geht nur für array, bei pointer gibt es größe des pointers zurück
-	if ((return_code = fido_cred_set_user(cred, user_id, bytes_in_user_id, user_name, user_display_name, user_icon)) != FIDO_OK)
+	if ((return_code = fido_cred_set_user(cred, user_id, bytes_in_user_id, parameters->user_name, parameters->user_display_name, parameters->user_icon)) != FIDO_OK)
 		errx(1, "fido_cred_set_user: %s (0x%x)", fido_strerr(return_code), return_code);
-	printf("test");
+
 	// Resident key
 	if ((return_code = fido_cred_set_rk(cred, FIDO_OPT_FALSE)) != FIDO_OK)
 		errx(1, "fido_cred_set_rk: %s (0x%x)", fido_strerr(return_code), return_code);
@@ -143,47 +168,71 @@ static void make_credential(fido_dev_t	*dev){
 	const char* pin = NULL;
 	if ((return_code = fido_dev_make_cred(dev, cred, pin)) != FIDO_OK)
 		errx(1, "fido_dev_make_cred: %s (0x%x)", fido_strerr(return_code), return_code);
-	
 
-	return_code = fido_dev_close(dev);
-	fido_dev_free(&dev);
+	print_attcred(cred);
+
 	fido_cred_free(&cred);
-
-	printf("Final result code: %d \n", return_code);
-	fido_strerr(return_code);
-
-	// free(challenge);
-	// free(client_data_hash);
-	// free(user_id);
-	free(collected_client_data);
+	return return_code;
 }
 
-void get_assertion(fido_dev_t	*dev){
-	bool		 up = false;
-	bool		 uv = false;
-	bool		 u2f = false;
-	fido_dev_t	*dev = NULL;
+static int get_assertion(fido_dev_t* dev, const fido_parameters_t* parameters){
 	fido_assert_t	*assert = NULL;
 	const char	*pin = NULL;
-	const char	*hmac_out = NULL;
-	unsigned char	*body = NULL;
-	long long	 seconds = 0;
-	size_t		 len;
 	int		 type = COSE_ES256;
-	int		 ext = 0;
-	int		 ch;
-	int		 r;
+	int		 return_code;
 
 	if ((assert = fido_assert_new()) == NULL)
 		errx(1, "fido_assert_new");
+
+	// Client data hash
+	size_t bytes_in_hash = SHA256_DIGEST_LENGTH;
+	unsigned char client_data_hash[bytes_in_hash];
+
+	if(get_client_data_hash(client_data_hash,bytes_in_hash)){
+		printf("Error occured in hashing of client data");
+	}
+
+	return_code = fido_assert_set_clientdata_hash(assert, client_data_hash, bytes_in_hash);
+	if (return_code != FIDO_OK) {
+		errx(1, "fido_assert_set_clientdata_hash: %s (0x%x)", fido_strerr(return_code), return_code);
+	}
+
+	// RP
+	return_code = fido_assert_set_rp(assert, parameters->rp_id);
+	if (return_code != FIDO_OK){
+		errx(1, "fido_assert_set_rp: %s (0x%x)", fido_strerr(return_code), return_code);
+	}
+
+	// Assertion
+	return_code = fido_dev_get_assert(dev, assert, pin);
+	if (return_code != FIDO_OK) {
+		errx(1, "fido_dev_get_assert: %s (0x%x)", fido_strerr(return_code), return_code);
+	}
+
+	return_code = fido_dev_close(dev);
+	if (return_code != FIDO_OK)
+		errx(1, "fido_dev_close: %s (0x%x)", fido_strerr(return_code), return_code);
+
+	
+	fido_assert_free(&assert);
+	return return_code;
 }
+
 
 int main(){
 	size_t		 dev_infos_len = 0;
 	fido_dev_info_t	*dev_infos = NULL;
 	const char	*path = NULL;
 	fido_dev_t	*dev;
+	int return_code = 0;
 	// retrieve device TODO error handling
+
+	fido_parameters_t fixed_params;
+
+	// should be correct, the values are read only and stored at compile time, see
+	// https://stackoverflow.com/questions/1011455/is-it-possible-to-modify-a-string-of-char-in-c
+	get_fixed_parameters(&fixed_params);
+
 	
 	dev_infos = fido_dev_info_new(16);
 	fido_dev_info_manifest(dev_infos, 16, &dev_infos_len);
@@ -195,8 +244,14 @@ int main(){
 		printf("Is not a FIDO2 device \n");
 	}
 
-	make_credential(dev);
-	get_assertion(dev);
+	return_code |= make_credential(dev, &fixed_params);
+
+	// return_code |= get_assertion(dev, &fixed_params);
+
+	return_code |= fido_dev_close(dev);
+	fido_dev_free(&dev);
+
+	return return_code;
 }
 
 // https://developers.yubico.com/libfido2/Manuals/fido_cred_verify.html
