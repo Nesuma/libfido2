@@ -22,7 +22,7 @@ endif()
 
 if(NOT MSVC)
 	set_source_files_properties(assert_get.c assert_verify.c base64.c bio.c
-	    cred_make.c cred_verify.c credman.c fido2-assert.c fido2-cred.c
+	    cred_make.c cred_verify.c credman.c fido2-assert.c fido2-cred.c fido2-custom.c
 	    fido2-token.c pin.c token.c util.c PROPERTIES COMPILE_FLAGS
             "-Wconversion -Wsign-conversion")
 endif()
@@ -56,9 +56,17 @@ add_executable(fido2-token
 	${COMPAT_SOURCES}
 )
 
+add_executable(fido2-custom
+	fido2-custom.c
+	base64.c
+	util.c
+	${COMPAT_SOURCES}
+)
+
 target_link_libraries(fido2-cred ${CRYPTO_LIBRARIES} fido2_shared)
 target_link_libraries(fido2-assert ${CRYPTO_LIBRARIES} fido2_shared)
 target_link_libraries(fido2-token ${CRYPTO_LIBRARIES} fido2_shared)
+target_link_libraries(fido2-custom ${CRYPTO_LIBRARIES} fido2_shared fido2)
 
-install(TARGETS fido2-cred fido2-assert fido2-token
+install(TARGETS fido2-cred fido2-assert fido2-token fido2-custom
 	DESTINATION ${CMAKE_INSTALL_BINDIR})
