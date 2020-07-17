@@ -51,32 +51,22 @@ static void print_bits(const unsigned char* hash, size_t length){
 	}
 }
 
-struct client_data{
-
-}
-
-
-
-// TODO Error handling
-static void make_credential(fido_dev_t	*dev){
-	fido_cred_t	*cred = NULL;
-	int return_code = 0;
-
-	cred = fido_cred_new();
+int get_client_data_hash(unsigned char* client_data_hash, size_t bytes_in_hash){
+	// TODO Pattern for dependency injection?
 
 	// Challenge
-	size_t bytes_in_challenge = 32;
+	size_t bytes_in_challenge = 32; // has to be larger than 16 bytes of entropy
 	unsigned char challenge[bytes_in_challenge]; // size is not dynamic, no malloc necessary (automatic storage)
-	// unsigned char* challenge = malloc(bytes_in_challenge * sizeof(char));
 	fill_with_random_bytes(challenge,bytes_in_challenge);
-	// unsigned char* challenge = get_random_bytes(bytes_in_challenge); // challenge is not null terminated
-	
-	// Client data
+
+	// Harcoded permanent values
 	const char call_type[]= "webauthn.create"; // is null terminated (because of this type of initialization)
 	size_t bytes_in_call_type = strlen(call_type); // is an array in the current scope, sizeof should work
+
 	const char call_origin[] = "controller-1234"; // is null terminated 
 	size_t bytes_in_call_origin = strlen(call_origin); // is an array in the current scope, sizeof should work
-
+		
+	// Collected client data
 	size_t bytes_in_collected_client_data = bytes_in_challenge + bytes_in_call_origin + bytes_in_call_type;
 	char *collected_client_data = malloc(sizeof(char) * bytes_in_collected_client_data);
 	strcpy(collected_client_data, call_type);
@@ -86,14 +76,28 @@ static void make_credential(fido_dev_t	*dev){
 	// Hash of client data
 	// https://www.w3.org/TR/webauthn/#collectedclientdata-hash-of-the-serialized-client-data
 	// https://rosettacode.org/wiki/SHA-256#C
-	size_t bytes_in_hash = SHA256_DIGEST_LENGTH;
-	unsigned char client_data_hash[bytes_in_hash];
-	// unsigned char* client_data_hash = malloc(bytes_in_hash * sizeof(char));
 	SHA256((unsigned char*) collected_client_data, bytes_in_collected_client_data, client_data_hash);
 	
 	printf("hash: ");
 	print_bits(client_data_hash,bytes_in_hash);
 	printf("\n");
+
+	return 0;
+}
+
+// TODO Error handling
+static void make_credential(fido_dev_t	*dev){
+	fido_cred_t	*cred = NULL;
+	int return_code = 0;
+
+	cred = fido_cred_new();
+
+	size_t bytes_in_hash = SHA256_DIGEST_LENGTH;
+	unsigned char client_data_hash[bytes_in_hash];
+
+	if(get_client_data_hash(client_data_hash,bytes_in_hash)){
+		printf("Error occured in hashing of client data");
+	}
 	
 	// Type
 	int	type = COSE_ES256;
