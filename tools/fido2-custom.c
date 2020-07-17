@@ -51,6 +51,13 @@ static void print_bits(const unsigned char* hash, size_t length){
 	}
 }
 
+struct client_data{
+
+}
+
+
+
+// TODO Error handling
 static void make_credential(fido_dev_t	*dev){
 	fido_cred_t	*cred = NULL;
 	int return_code = 0;
@@ -65,9 +72,9 @@ static void make_credential(fido_dev_t	*dev){
 	// unsigned char* challenge = get_random_bytes(bytes_in_challenge); // challenge is not null terminated
 	
 	// Client data
-	const char* call_type= "webauthn.create"; // is null terminated (because of this type of initialization)
+	const char call_type[]= "webauthn.create"; // is null terminated (because of this type of initialization)
 	size_t bytes_in_call_type = strlen(call_type); // is an array in the current scope, sizeof should work
-	const char* call_origin = "controller-1234"; // is null terminated 
+	const char call_origin[] = "controller-1234"; // is null terminated 
 	size_t bytes_in_call_origin = strlen(call_origin); // is an array in the current scope, sizeof should work
 
 	size_t bytes_in_collected_client_data = bytes_in_challenge + bytes_in_call_origin + bytes_in_call_type;
@@ -98,15 +105,15 @@ static void make_credential(fido_dev_t	*dev){
 		errx(1, "fido_cred_set_clientdata_hash: %s (0x%x)", fido_strerr(return_code), return_code);
 
 	// RP
-	const char* rp_id = "localhost";
-	const char* rp_name = "sandbox localhost";
+	const char rp_id[] = "localhost";
+	const char rp_name[] = "sandbox localhost";
 	if ((return_code = fido_cred_set_rp(cred, rp_id, rp_name)) != FIDO_OK)
 		errx(1, "fido_cred_set_rp: %s (0x%x)", fido_strerr(return_code), return_code);
 
 	// User
-	const char* user_name = "1234-technician";
-	const char* user_display_name = "Technician";
-	const char* user_icon = NULL;
+	const char user_name[] = "1234-technician";
+	const char user_display_name[] = "Technician";
+	const char user_icon[] = NULL;
 	size_t bytes_in_user_id = 32;
 	
 	unsigned char user_id[bytes_in_user_id];
@@ -147,8 +154,24 @@ static void make_credential(fido_dev_t	*dev){
 	free(collected_client_data);
 }
 
-void get_assertion(){
+void get_assertion(fido_dev_t	*dev){
+	bool		 up = false;
+	bool		 uv = false;
+	bool		 u2f = false;
+	fido_dev_t	*dev = NULL;
+	fido_assert_t	*assert = NULL;
+	const char	*pin = NULL;
+	const char	*hmac_out = NULL;
+	unsigned char	*body = NULL;
+	long long	 seconds = 0;
+	size_t		 len;
+	int		 type = COSE_ES256;
+	int		 ext = 0;
+	int		 ch;
+	int		 r;
 
+	if ((assert = fido_assert_new()) == NULL)
+		errx(1, "fido_assert_new");
 }
 
 int main(){
@@ -169,7 +192,7 @@ int main(){
 	}
 
 	make_credential(dev);
-	get_assertion();
+	get_assertion(dev);
 }
 
 // https://developers.yubico.com/libfido2/Manuals/fido_cred_verify.html
