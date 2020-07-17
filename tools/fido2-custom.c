@@ -51,35 +51,24 @@ static void print_bits(const unsigned char* hash, size_t length){
 	}
 }
 
-static void make_credential(void){
-	const char	*path = NULL;
-	fido_dev_t	*dev;
-	size_t		 dev_infos_len = 0;
-	fido_dev_info_t	*dev_infos = NULL;
+static void make_credential(fido_dev_t	*dev){
 	fido_cred_t	*cred = NULL;
 	int return_code = 0;
 
-	// retrieve device TODO error handling
 	cred = fido_cred_new();
-	dev_infos = fido_dev_info_new(16);
-	fido_dev_info_manifest(dev_infos, 16, &dev_infos_len);
-	dev = open_from_manifest(dev_infos, dev_infos_len, path);
 
-	if(fido_dev_is_fido2(dev)) {
-		printf("Yes is a fido2 device \n");
-	} else {
-		printf("Is not a FIDO2 device \n");
-	}
-
+	// Challenge
 	size_t bytes_in_challenge = 32;
 	unsigned char challenge[bytes_in_challenge]; // size is not dynamic, no malloc necessary (automatic storage)
+	// unsigned char* challenge = malloc(bytes_in_challenge * sizeof(char));
 	fill_with_random_bytes(challenge,bytes_in_challenge);
 	// unsigned char* challenge = get_random_bytes(bytes_in_challenge); // challenge is not null terminated
 	
-	char* call_type = "webauthn.create"; // is null terminated (because of this type of initialization)
-	size_t bytes_in_call_type = sizeof(call_type)/sizeof(call_type[0]); // is an array in the current scope, sizeof should work
-	char* call_origin = "controller-1234"; // is null terminated 
-	size_t bytes_in_call_origin = sizeof(call_origin)/sizeof(call_origin[0]); // is an array in the current scope, sizeof should work
+	// Client data
+	const char* call_type= "webauthn.create"; // is null terminated (because of this type of initialization)
+	size_t bytes_in_call_type = strlen(call_type); // is an array in the current scope, sizeof should work
+	const char* call_origin = "controller-1234"; // is null terminated 
+	size_t bytes_in_call_origin = strlen(call_origin); // is an array in the current scope, sizeof should work
 
 	size_t bytes_in_collected_client_data = bytes_in_challenge + bytes_in_call_origin + bytes_in_call_type;
 	char *collected_client_data = malloc(sizeof(char) * bytes_in_collected_client_data);
@@ -87,10 +76,12 @@ static void make_credential(void){
 	strcat(collected_client_data, call_origin);
 	strcat(collected_client_data, (char *) challenge); // all signed char arrays
 
+	// Hash of client data
 	// https://www.w3.org/TR/webauthn/#collectedclientdata-hash-of-the-serialized-client-data
 	// https://rosettacode.org/wiki/SHA-256#C
 	size_t bytes_in_hash = SHA256_DIGEST_LENGTH;
-	unsigned char* client_data_hash[bytes_in_hash];
+	unsigned char client_data_hash[bytes_in_hash];
+	// unsigned char* client_data_hash = malloc(bytes_in_hash * sizeof(char));
 	SHA256((unsigned char*) collected_client_data, bytes_in_collected_client_data, client_data_hash);
 	
 	printf("hash: ");
@@ -116,25 +107,26 @@ static void make_credential(void){
 	const char* user_name = "1234-technician";
 	const char* user_display_name = "Technician";
 	const char* user_icon = NULL;
-	size_t user_id_bytes = 32;
+	size_t bytes_in_user_id = 32;
 	
-	unsigned char *user_id[user_id_bytes];
-	fill_with_random_bytes(user_id,user_id_bytes);
-	printf("Size of user id: %d \n", user_id_bytes);
+	unsigned char user_id[bytes_in_user_id];
+	// unsigned char* user_id = malloc(bytes_in_user_id * sizeof(char));
+	fill_with_random_bytes(user_id,bytes_in_user_id);
+	printf("Size of user id: %d \n", bytes_in_user_id);
 	// TODO https://stackoverflow.com/questions/4054284/sizeof-for-a-null-terminated-const-char
 	// kann so nicht funktionieren, sizeof() geht nur für array, bei pointer gibt es größe des pointers zurück
-	if ((return_code = fido_cred_set_user(cred, user_id, user_id_bytes, user_name, user_display_name, user_icon)) != FIDO_OK)
+	if ((return_code = fido_cred_set_user(cred, user_id, bytes_in_user_id, user_name, user_display_name, user_icon)) != FIDO_OK)
 		errx(1, "fido_cred_set_user: %s (0x%x)", fido_strerr(return_code), return_code);
-
+	printf("test");
 	// Resident key
-	if ((return_code = fido_cred_set_rk(cred, FIDO_OPT_TRUE)) != FIDO_OK)
+	if ((return_code = fido_cred_set_rk(cred, FIDO_OPT_FALSE)) != FIDO_OK)
 		errx(1, "fido_cred_set_rk: %s (0x%x)", fido_strerr(return_code), return_code);
 
 	// User verification
 	// Yubikey can't verify user, can only omit
 	if ((return_code = fido_cred_set_uv(cred, FIDO_OPT_OMIT)) != FIDO_OK)
 		errx(1, "fido_cred_set_uv: %s (0x%x)", fido_strerr(return_code), return_code);
-
+	
 	// Create credential
 	// No pin necessary if no pin set
 	const char* pin = NULL;
@@ -149,11 +141,35 @@ static void make_credential(void){
 	printf("Final result code: %d \n", return_code);
 	fido_strerr(return_code);
 
+	// free(challenge);
+	// free(client_data_hash);
+	// free(user_id);
 	free(collected_client_data);
 }
 
+void get_assertion(){
+
+}
+
 int main(){
-	make_credential();
+	size_t		 dev_infos_len = 0;
+	fido_dev_info_t	*dev_infos = NULL;
+	const char	*path = NULL;
+	fido_dev_t	*dev;
+	// retrieve device TODO error handling
+	
+	dev_infos = fido_dev_info_new(16);
+	fido_dev_info_manifest(dev_infos, 16, &dev_infos_len);
+	dev = open_from_manifest(dev_infos, dev_infos_len, path);
+
+	if(fido_dev_is_fido2(dev)) {
+		printf("Yes is a fido2 device \n");
+	} else {
+		printf("Is not a FIDO2 device \n");
+	}
+
+	make_credential(dev);
+	get_assertion();
 }
 
 // https://developers.yubico.com/libfido2/Manuals/fido_cred_verify.html
