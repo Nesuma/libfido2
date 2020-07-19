@@ -8,6 +8,11 @@
 #include <unistd.h>
 #endif
 
+// assert load_pubkey
+#include <fido/es256.h>
+#include <fido/rs256.h>
+#include <fido/eddsa.h>
+
 #include "../openbsd-compat/openbsd-compat.h"
 #include "extern.h"
 
@@ -23,6 +28,7 @@ typedef struct fido_parameters
 	const char *user_name;
 	const char *user_display_name;
 	const char *user_icon;
+	const char *credential_file_name;
 	int type;
 } fido_parameters_t;
 
@@ -34,6 +40,7 @@ void get_fixed_parameters(fido_parameters_t *params)
 	params->user_display_name = "Technician";
 	params->user_icon = NULL;
 	params->type = COSE_ES256;
+	params->credential_file_name = "credential";
 }
 
 static fido_dev_t *
@@ -122,11 +129,14 @@ int get_client_data_hash(unsigned char *client_data_hash, size_t bytes_in_hash)
 static void
 print_attcred(const fido_cred_t *cred)
 {
-	FILE *out_f = NULL; 
+	FILE *out_f = NULL;
 	out_f = open_write("credential-debug");
-	if (out_f != NULL){
+	if (out_f != NULL)
+	{
 		printf("\n\nSollte gehen\n\n");
-	} else {
+	}
+	else
+	{
 		printf("\n\nIst null\n\n");
 	}
 	char *cdh = NULL;
@@ -243,10 +253,12 @@ static int make_credential(fido_dev_t *dev, const fido_parameters_t *parameters,
 
 static int get_assertion(fido_dev_t *dev, const fido_parameters_t *parameters, fido_assert_t *assert)
 {
-
+	FILE *in_file = NULL;
 	const char *pin = NULL;
-	// int type = COSE_ES256; never used and replaced with parameters
-	int return_code;
+	int return_code = 0;
+
+	struct blob credential_id;
+	memset(&credential_id, 0, sizeof(credential_id)); // reasoning https://stackoverflow.com/questions/37105736/is-it-good-style-to-memset-a-struct-before-using-it
 
 	// Client data hash
 	size_t bytes_in_hash = SHA256_DIGEST_LENGTH;
@@ -263,6 +275,22 @@ static int get_assertion(fido_dev_t *dev, const fido_parameters_t *parameters, f
 		errx(1, "fido_assert_set_clientdata_hash: %s (0x%x)", fido_strerr(return_code), return_code);
 	}
 
+	// Credential id (necessary because we aren't using residential keys)
+	if (access(parameters->credential_file_name, F_OK) == -1)
+	{
+		// file doesn't exist
+		printf("File %s doesn't exist\n", parameters->credential_file_name);
+		return FIDO_ERR_NO_CREDENTIALS;
+	}
+	in_file = open_read(parameters->credential_file_name);
+
+	return_code = base64_read(in_file, &credential_id);
+	if ((return_code = fido_assert_allow_cred(assert, credential_id.ptr, credential_id.len)) != FIDO_OK)
+	{
+		errx(1, "fido_assert_allow_cred: %s", fido_strerr(return_code));
+	}
+	fclose(in_file);
+
 	// RP
 	return_code = fido_assert_set_rp(assert, parameters->rp_id);
 	if (return_code != FIDO_OK)
@@ -278,19 +306,88 @@ static int get_assertion(fido_dev_t *dev, const fido_parameters_t *parameters, f
 		// errx(1, "fido_dev_get_assert: %s (0x%x)", fido_strerr(return_code), return_code);
 	}
 
+	free(credential_id.ptr);
+
 	return return_code;
+}
+
+static void *
+load_pubkey(int type, const char *file)
+{
+	EC_KEY *ec = NULL;
+	RSA *rsa = NULL;
+	EVP_PKEY *eddsa = NULL;
+	es256_pk_t *es256_pk = NULL;
+	rs256_pk_t *rs256_pk = NULL;
+	eddsa_pk_t *eddsa_pk = NULL;
+	void *pk = NULL;
+
+	if (type == COSE_ES256)
+	{
+		if ((ec = read_ec_pubkey(file)) == NULL)
+			errx(1, "read_ec_pubkey");
+		if ((es256_pk = es256_pk_new()) == NULL)
+			errx(1, "es256_pk_new");
+		if (es256_pk_from_EC_KEY(es256_pk, ec) != FIDO_OK)
+			errx(1, "es256_pk_from_EC_KEY");
+
+		pk = es256_pk;
+		EC_KEY_free(ec);
+	}
+	else if (type == COSE_RS256)
+	{
+		if ((rsa = read_rsa_pubkey(file)) == NULL)
+			errx(1, "read_rsa_pubkey");
+		if ((rs256_pk = rs256_pk_new()) == NULL)
+			errx(1, "rs256_pk_new");
+		if (rs256_pk_from_RSA(rs256_pk, rsa) != FIDO_OK)
+			errx(1, "rs256_pk_from_RSA");
+
+		pk = rs256_pk;
+		RSA_free(rsa);
+	}
+	else if (type == COSE_EDDSA)
+	{
+		if ((eddsa = read_eddsa_pubkey(file)) == NULL)
+			errx(1, "read_eddsa_pubkey");
+		if ((eddsa_pk = eddsa_pk_new()) == NULL)
+			errx(1, "eddsa_pk_new");
+		if (eddsa_pk_from_EVP_PKEY(eddsa_pk, eddsa) != FIDO_OK)
+			errx(1, "eddsa_pk_from_EVP_PKEY");
+
+		pk = eddsa_pk;
+		EVP_PKEY_free(eddsa);
+	}
+
+	return (pk);
 }
 
 int authenticate_token(fido_dev_t *dev, const fido_parameters_t *fixed_params)
 {
 	int return_code = 0;
 	fido_assert_t *assert = NULL;
+	void *pk = NULL;
+
+	// Get assertion
 	if ((assert = fido_assert_new()) == NULL)
 	{
 		errx(1, "fido_assert_new");
 	}
 	printf("Trying to authenticate\n");
 	return_code = get_assertion(dev, fixed_params, assert);
+
+	// Verify assertion
+	if (return_code == 0)
+	{
+		pk = load_pubkey(fixed_params->type, "pubkey");
+
+		if ((return_code = fido_assert_verify(assert, 0, fixed_params->type, pk)) != FIDO_OK)
+		{
+			errx(1, "fido_assert_verify: %s", fido_strerr(return_code));
+		}
+		printf("successfully verified assertion\n");
+	}
+
 	fido_assert_free(&assert);
 	return return_code;
 }
@@ -308,22 +405,26 @@ int register_token(fido_dev_t *dev, const fido_parameters_t *fixed_params)
 	return_code = make_credential(dev, fixed_params, cred);
 	print_attcred(cred);
 
-	if(return_code){
+	if (return_code)
+	{
 		// stop on error
 		return return_code;
 	}
 	// Verify authenticator response
-	if (fido_cred_x5c_ptr(cred) == NULL) {
+	if (fido_cred_x5c_ptr(cred) == NULL)
+	{
 		if ((return_code |= fido_cred_verify_self(cred)) != FIDO_OK)
 			errx(1, "fido_cred_verify_self: %s", fido_strerr(return_code));
-	} else {
+	}
+	else
+	{
 		if ((return_code |= fido_cred_verify(cred)) != FIDO_OK)
 			errx(1, "fido_cred_verify: %s", fido_strerr(return_code));
 	}
 
 	// Store credentials
-	FILE* cred_output_file = NULL;
-	cred_output_file = open_write("credential");
+	FILE *cred_output_file = NULL;
+	cred_output_file = open_write(fixed_params->credential_file_name);
 	print_cred(cred_output_file, fixed_params->type, cred);
 	fclose(cred_output_file);
 
@@ -364,13 +465,17 @@ int main()
 				return_code = authenticate_token(dev, &fixed_params);
 
 				// registration only after assertion didn't work, need a better error handling system
-				if(REGISTRATION_ALLOWED){
+				if (REGISTRATION_ALLOWED && return_code != FIDO_OK)
+				{
 					printf("No credential registered on token, registering now\n");
 
-					if(return_code = register_token(dev, &fixed_params)){
-						printf("%d\n",return_code);
+					if (return_code = register_token(dev, &fixed_params))
+					{
+						printf("%d\n", return_code);
 						return return_code;
-					} else {
+					}
+					else
+					{
 						printf("Successfully registered token\n");
 					}
 				}
