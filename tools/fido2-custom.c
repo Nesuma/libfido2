@@ -274,12 +274,9 @@ static int get_assertion(fido_dev_t *dev, const fido_parameters_t *parameters, f
 	return_code = fido_dev_get_assert(dev, assert, pin);
 	if (return_code != FIDO_OK)
 	{
-		errx(1, "fido_dev_get_assert: %s (0x%x)", fido_strerr(return_code), return_code);
+		printf("Assertion not possible: %s (0x%x)\n", fido_strerr(return_code), return_code);
+		// errx(1, "fido_dev_get_assert: %s (0x%x)", fido_strerr(return_code), return_code);
 	}
-
-	return_code = fido_dev_close(dev);
-	if (return_code != FIDO_OK)
-		errx(1, "fido_dev_close: %s (0x%x)", fido_strerr(return_code), return_code);
 
 	return return_code;
 }
@@ -364,8 +361,9 @@ int main()
 
 			if (is_a_new_token)
 			{
-				return_code |= authenticate_token(dev, &fixed_params);
+				return_code = authenticate_token(dev, &fixed_params);
 
+				// registration only after assertion didn't work, need a better error handling system
 				if(REGISTRATION_ALLOWED){
 					printf("No credential registered on token, registering now\n");
 
